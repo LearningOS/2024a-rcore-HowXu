@@ -14,9 +14,10 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::MAX_APP_NUM;
+use crate::config::{MAX_APP_NUM,MAX_SYSCALL_NUM};
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
@@ -51,9 +52,14 @@ lazy_static! {
     /// Global variable: TASK_MANAGER
     pub static ref TASK_MANAGER: TaskManager = {
         let num_app = get_num_app();
+        //这里初始化也要小小改一下
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            //加两个初始化
+            sys_calls: [0;MAX_SYSCALL_NUM],
+            first_to_this_sys_time: 0,
+            first_sys_run_time:0
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -80,6 +86,9 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
+        //第一次RunTask的时候 应该记录一下初始时间
+        task0.first_sys_run_time = get_time_ms();
+
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -121,6 +130,17 @@ impl TaskManager {
         if let Some(next) = self.find_next_task() {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
+            //切换下一个任务之前把前后时间计算出来
+
+            //因为每个任务切换都一定会走这里的
+
+            //沟坝写错了 系统调用时刻距离任务第一次被调度时刻的时长
+            inner.tasks[current].first_to_this_sys_time = get_time_ms() - inner.tasks[current].first_sys_run_time;//(get_time_ms() - inner.tasks[current].sys_run_times) + inner.tasks[current].sys_run_times;
+            //next也进行更新 != 0说明这不是第一次系统调用
+            if inner.tasks[next].first_to_this_sys_time == 0 {
+                inner.tasks[next].first_sys_run_time = get_time_ms();
+            }
+
             inner.tasks[next].task_status = TaskStatus::Running;
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
@@ -134,6 +154,26 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    //你Missing你妈了窝巢
+    pub fn get_current_first_to_this_sys_time(&self) -> usize{
+        let i = self.inner.exclusive_access();//安全访问
+        return i.tasks[i.current_task].first_to_this_sys_time;
+    }
+
+    //systemcall应该要到每次Trap的地方加 应该还有一个专门的函数对外接口增加这个值
+    pub fn get_syscall_times(&self) -> [u32;MAX_SYSCALL_NUM]{
+        let i = self.inner.exclusive_access();//安全访问
+        return i.tasks[i.current_task].sys_calls;
+    }
+
+    //专门用来增加系统调用的
+    pub fn syscalls_add_up(&self,id:usize){
+        let mut i = self.inner.exclusive_access();//mut因为要加 
+        //为什么i.current_task不给用
+        let crt: usize = i.current_task;
+        i.tasks[crt].sys_calls[id] += 1; //增长
     }
 }
 
@@ -168,4 +208,19 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+//外接一个函数获得时长 这个inner是不可外部访问的所以还要额外加接口
+pub fn get_current_first_to_this_sys_time() -> usize{
+    return TASK_MANAGER.get_current_first_to_this_sys_time();
+}
+
+//也是外接
+pub fn get_syscall_times() -> [u32;MAX_SYSCALL_NUM]{
+    return  TASK_MANAGER.get_syscall_times();
+}
+
+//增长函数
+pub fn syscalls_add_up(id:usize){
+    TASK_MANAGER.syscalls_add_up(id);
 }

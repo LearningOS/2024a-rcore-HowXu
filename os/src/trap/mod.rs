@@ -15,7 +15,7 @@
 mod context;
 
 use crate::syscall::syscall;
-use crate::task::{exit_current_and_run_next, suspend_current_and_run_next};
+use crate::task::{exit_current_and_run_next, suspend_current_and_run_next,syscalls_add_up};
 use crate::timer::set_next_trigger;
 use core::arch::global_asm;
 use riscv::register::{
@@ -50,12 +50,18 @@ pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
     let stval = stval::read(); // get extra value
                                // trace!("into {:?}", scause.cause());
     match scause.cause() {
+        //这里下手
         Trap::Exception(Exception::UserEnvCall) => {
+            
             // jump to next instruction anyway
             cx.sepc += 4;
+            //为任务增加1的system_call  cx.x[17] 我阐述你的梦的 这个东西必须在syscall之前 不然sysinfo会直接少一次你自己想
+            syscalls_add_up(cx.x[17]);
             // get system call return value
             cx.x[10] = syscall(cx.x[17], [cx.x[10], cx.x[11], cx.x[12]]) as usize;
+            
         }
+        //下面都是错的不看了
         Trap::Exception(Exception::StoreFault) | Trap::Exception(Exception::StorePageFault) => {
             println!("[kernel] PageFault in application, bad addr = {:#x}, bad instruction = {:#x}, kernel killed it.", stval, cx.sepc);
             exit_current_and_run_next();
