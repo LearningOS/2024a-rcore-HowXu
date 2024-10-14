@@ -130,6 +130,7 @@ impl TaskManager {
         if let Some(next) = self.find_next_task() {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
+            
             //切换下一个任务之前把前后时间计算出来
 
             //因为每个任务切换都一定会走这里的
@@ -137,8 +138,8 @@ impl TaskManager {
             //沟坝写错了 系统调用时刻距离任务第一次被调度时刻的时长
             inner.tasks[current].first_to_this_sys_time = get_time_ms() - inner.tasks[current].first_sys_run_time;//(get_time_ms() - inner.tasks[current].sys_run_times) + inner.tasks[current].sys_run_times;
             //next也进行更新 != 0说明这不是第一次系统调用
-            if inner.tasks[next].first_to_this_sys_time == 0 {
-                inner.tasks[next].first_sys_run_time = get_time_ms();
+            if inner.tasks[next].first_sys_run_time == 0 {
+            inner.tasks[next].first_sys_run_time = get_time_ms();
             }
 
             inner.tasks[next].task_status = TaskStatus::Running;
